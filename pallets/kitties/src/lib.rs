@@ -5,18 +5,29 @@ pub use pallet::*;
 #[frame_support::pallet]
 pub mod pallet {
 	use codec::{Decode, Encode, HasCompact};
-	use frame_support::{dispatch::DispatchResult, pallet_prelude::*, traits::Randomness};
+	use frame_support::{
+		dispatch::DispatchResult,
+		pallet_prelude::*,
+		traits::{Currency, Randomness, ReservableCurrency},
+	};
 	use frame_system::pallet_prelude::*;
 	use sp_io::hashing::blake2_128;
 
-	#[derive(Encode, Decode)]
-	pub struct Kitty(pub [u8; 16]);
+	#[derive(Clone, Encode, Decode)]
+	pub struct Kitty<T: Config> {
+		pub dna: [u8; 16],
+		pub owner: T::AccountId,
+		pub price: Option<BalanceOf<T>>,
+	}
 
 	#[derive(Encode, Decode, Debug, Clone, PartialEq)]
 	pub enum Gender {
 		Male,
 		Female,
 	}
+
+	type BalanceOf<T> =
+		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
@@ -26,6 +37,11 @@ pub mod pallet {
 		type Randomness: Randomness<Self::Hash, Self::BlockNumber>;
 		/// Identifier for the kitty.
 		type KittyId: From<u32> + Member + Parameter + Default + Copy + HasCompact + MaxEncodedLen;
+		/// The currency trait.
+		type Currency: ReservableCurrency<Self::AccountId>;
+		/// The owner of kitty must reserve a certain amount of currency
+		#[pallet::constant]
+		type HoldingDepositForOneKitty: Get<BalanceOf<Self>>;
 	}
 
 	#[pallet::pallet]
@@ -39,12 +55,7 @@ pub mod pallet {
 	#[pallet::storage]
 	#[pallet::getter(fn kitties)]
 	pub type Kitties<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::KittyId, Option<Kitty>, ValueQuery>;
-
-	#[pallet::storage]
-	#[pallet::getter(fn kitties_owner)]
-	pub type KittiesOwner<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::KittyId, Option<T::AccountId>, ValueQuery>;
+		StorageMap<_, Blake2_128Concat, T::KittyId, Option<Kitty<T>>, ValueQuery>;
 
 	#[pallet::event]
 	#[pallet::metadata(T::AccountId = "AccountId")]
@@ -52,6 +63,7 @@ pub mod pallet {
 	pub enum Event<T: Config> {
 		KittyCreated(T::KittyId, T::AccountId),
 		KittyTransfered(T::KittyId, T::AccountId, T::AccountId),
+		KittyPriceSet(T::KittyId, BalanceOf<T>),
 	}
 
 	#[pallet::error]
@@ -60,6 +72,8 @@ pub mod pallet {
 		KittyNotExists,
 		NotOwnerOfKitty,
 		CanNotBreedWithSameGender,
+		KittyNotForSell,
+		PaymentNotEnough,
 	}
 
 	#[pallet::call]
@@ -88,13 +102,50 @@ pub mod pallet {
 			ensure!(Kitties::<T>::get(id2).is_some(), Error::<T>::KittyNotExists);
 			let kitty1 = Kitties::<T>::get(id1).unwrap();
 			let kitty2 = Kitties::<T>::get(id1).unwrap();
-			ensure!(kitty1.gender() == kitty2.gender(), Error::<T>::CanNotBreedWithSameGender);
+			ensure!(kitty1.gender() != kitty2.gender(), Error::<T>::CanNotBreedWithSameGender);
+
 			let selector = Self::get_random_value(&who);
 			let mut dna = [0u8; 16];
 			for i in 0..dna.len() {
-				dna[i] = (selector[i] & kitty1.0[i]) | (selector[i] & kitty2.0[i]);
+				dna[i] = (selector[i] & kitty1.dna[i]) | (selector[i] & kitty2.dna[i]);
 			}
 			Self::create_kitty(dna, &who)
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		pub fn set_price(
+			origin: OriginFor<T>,
+			id: T::KittyId,
+			price: BalanceOf<T>,
+		) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+			ensure!(Kitties::<T>::get(id).is_some(), Error::<T>::KittyNotExists);
+			let kitty = Kitties::<T>::get(id).unwrap();
+			ensure!(who.clone() == kitty.owner, Error::<T>::NotOwnerOfKitty);
+
+			let mut kitty = Kitties::<T>::get(id).unwrap();
+			kitty.price = Some(price);
+			Kitties::<T>::insert(id, Some(kitty.clone()));
+
+			Self::deposit_event(Event::KittyPriceSet(id.clone(), price));
+			Ok(())
+		}
+
+		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
+		pub fn buy(origin: OriginFor<T>, id: T::KittyId, payment: BalanceOf<T>) -> DispatchResult {
+			let buyer = ensure_signed(origin)?;
+			ensure!(Kitties::<T>::get(id).is_some(), Error::<T>::KittyNotExists);
+			let kitty = Kitties::<T>::get(id).unwrap();
+			ensure!(kitty.price.is_some(), Error::<T>::KittyNotForSell);
+			let price = kitty.price.unwrap();
+			ensure!(payment >= price, Error::<T>::PaymentNotEnough);
+			T::Currency::transfer(
+				&buyer,
+				&kitty.owner,
+				price,
+				frame_support::traits::ExistenceRequirement::KeepAlive,
+			)?;
+			Self::transfer_kitty(&id, &kitty.owner, &buyer)
 		}
 	}
 
@@ -116,13 +167,17 @@ pub mod pallet {
 				}
 				None => 1,
 			};
+			T::Currency::reserve(&owner, T::HoldingDepositForOneKitty::get())?;
+
 			let id = T::KittyId::from(count);
-			Kitties::<T>::insert(id, Some(Kitty(dna)));
-			KittiesOwner::<T>::insert(id, Some(owner.clone()));
+			Kitties::<T>::insert(id, Some(Kitty {
+				dna,
+				owner: owner.clone(),
+				price: Option::None,
+			}));
 			KittiesCount::<T>::put(count);
 
 			Self::deposit_event(Event::KittyCreated(id.clone(), owner.clone()));
-
 			Ok(())
 		}
 
@@ -132,8 +187,14 @@ pub mod pallet {
 			new_owner: &T::AccountId,
 		) -> DispatchResult {
 			ensure!(Kitties::<T>::get(id).is_some(), Error::<T>::KittyNotExists);
-			ensure!(Some(owner.clone()) == KittiesOwner::<T>::get(id), Error::<T>::NotOwnerOfKitty);
-			KittiesOwner::<T>::insert(id, Some(new_owner));
+			let mut kitty = Kitties::<T>::get(id).unwrap();
+			ensure!(owner.clone() == kitty.owner, Error::<T>::NotOwnerOfKitty);
+			T::Currency::reserve(&new_owner, T::HoldingDepositForOneKitty::get())?;
+
+			T::Currency::unreserve(&owner, T::HoldingDepositForOneKitty::get());
+			kitty.owner = new_owner.clone();
+			Kitties::<T>::insert(id, Some(kitty.clone()));
+
 			Self::deposit_event(Event::KittyTransfered(
 				id.clone(),
 				owner.clone(),
@@ -143,9 +204,9 @@ pub mod pallet {
 		}
 	}
 
-	impl Kitty {
+	impl<T: Config> Kitty<T> {
 		pub fn gender(&self) -> Gender {
-			if self.0[0] % 2 == 0 {
+			if self.dna[0] % 2 == 0 {
 				Gender::Male
 			} else {
 				Gender::Female
