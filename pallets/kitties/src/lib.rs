@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub use frame_system::pallet::*;
+pub use pallet::*;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -11,6 +11,12 @@ pub mod pallet {
 
 	#[derive(Encode, Decode)]
 	pub struct Kitty(pub [u8; 16]);
+
+	#[derive(Encode, Decode, Debug, Clone, PartialEq)]
+	pub enum Gender {
+		Male,
+		Female,
+	}
 
 	type KittyIndex = u32;
 
@@ -23,7 +29,8 @@ pub mod pallet {
 	}
 
 	#[pallet::pallet]
-	#[pallet::generate_store(pub(super) trait Store)]	pub struct Pallet<T>(_);
+	#[pallet::generate_store(pub(super) trait Store)]
+	pub struct Pallet<T>(_);
 
 	#[pallet::storage]
 	#[pallet::getter(fn kitties_count)]
@@ -42,7 +49,7 @@ pub mod pallet {
 	#[pallet::metadata(T::AccountId = "AccountId")]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
-		KittyCreated(u32, T::AccountId),
+		KittyCreated(KittyIndex, T::AccountId),
 	}
 
 	#[pallet::error]
@@ -83,6 +90,16 @@ pub mod pallet {
 				<frame_system::Pallet<T>>::extrinsic_index(),
 			);
 			payload.using_encoded(blake2_128)
+		}
+	}
+
+	impl Kitty {
+		pub fn gender(&self) -> Gender {
+			if self.0[0] % 2 == 0 {
+				Gender::Male
+			} else {
+				Gender::Female
+			}
 		}
 	}
 }
