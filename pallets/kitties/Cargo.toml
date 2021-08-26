@@ -59,6 +59,36 @@ git = 'https://github.com/paritytech/substrate.git'
 tag = 'monthly-2021-08'
 version = '4.0.0-dev'
 
+[dev-dependencies.pallet-aura]
+default-features = false
+git = 'https://github.com/paritytech/substrate.git'
+tag = 'monthly-2021-08'
+version = '4.0.0-dev'
+
+[dev-dependencies.pallet-balances]
+default-features = false
+git = 'https://github.com/paritytech/substrate.git'
+tag = 'monthly-2021-08'
+version = '4.0.0-dev'
+
+[dev-dependencies.pallet-randomness-collective-flip]
+default-features = false
+git = 'https://github.com/paritytech/substrate.git'
+tag = 'monthly-2021-08'
+version = '4.0.0-dev'
+
+[dev-dependencies.pallet-timestamp]
+default-features = false
+git = 'https://github.com/paritytech/substrate.git'
+tag = 'monthly-2021-08'
+version = '4.0.0-dev'
+
+[dev-dependencies.sp-consensus-aura]
+default-features = false
+git = 'https://github.com/paritytech/substrate.git'
+tag = 'monthly-2021-08'
+version = '0.10.0-dev'
+
 [features]
 default = ['std']
 runtime-benchmarks = ['frame-benchmarking']
@@ -68,5 +98,10 @@ std = [
     'frame-support/std',
     'frame-system/std',
     'frame-benchmarking/std',
+    'pallet-aura/std',
+    'pallet-balances/std',
+    'pallet-randomness-collective-flip/std',
+    'pallet-timestamp/std',
+    'sp-consensus-aura/std',
 ]
 try-runtime = ['frame-support/try-runtime']

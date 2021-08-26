@@ -2,6 +2,11 @@
 
 pub use pallet::*;
 
+#[cfg(test)]
+mod mock;
+#[cfg(test)]
+mod tests;
+
 #[frame_support::pallet]
 pub mod pallet {
 	use codec::{Decode, Encode, HasCompact};
@@ -100,7 +105,6 @@ pub mod pallet {
 		CanNotAdoptKittyWithAnOwner,
 		CanNotBreedWithSameGender,
 		KittyNotForSell,
-		PaymentNotEnough,
 		NoNeedToBuyKittyWithoutAnOwner,
 	}
 
@@ -121,7 +125,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// Simple transfer a kitty to another one without any fee.
+		/// Transfer (give) a kitty to another one without any fee.
 		///
 		/// This function can only be called by the owner of the kitty.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
@@ -131,9 +135,13 @@ pub mod pallet {
 			new_owner: T::AccountId,
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
+			ensure!(Kitties::<T>::contains_key(id), Error::<T>::KittyNotExists);
 			Self::ensure_owner(&id, &who)?;
 
-			Self::transfer_kitty(&id, &who, &new_owner)
+			Self::transfer_kitty(&id, &who, &new_owner)?;
+
+			Self::deposit_event(Event::KittyTransfered(id, who, new_owner));
+			Ok(())
 		}
 
 		/// Let two kitties to breed.
@@ -159,6 +167,7 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn abandon(origin: OriginFor<T>, id: T::KittyId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
+			ensure!(Kitties::<T>::contains_key(id), Error::<T>::KittyNotExists);
 			Self::ensure_owner(&id, &who)?;
 
 			T::Currency::unreserve(&who, T::HoldingDepositForOneKitty::get());
@@ -175,6 +184,7 @@ pub mod pallet {
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
 		pub fn adopt(origin: OriginFor<T>, id: T::KittyId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
+			ensure!(Kitties::<T>::contains_key(id), Error::<T>::KittyNotExists);
 			ensure!(!KittiesOwner::<T>::contains_key(id), Error::<T>::CanNotAdoptKittyWithAnOwner);
 
 			T::Currency::reserve(&who, T::HoldingDepositForOneKitty::get())?;
@@ -222,7 +232,7 @@ pub mod pallet {
 		///
 		/// Only a kitty with price (and of course with an owner) can be bought.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn buy(origin: OriginFor<T>, id: T::KittyId, payment: BalanceOf<T>) -> DispatchResult {
+		pub fn buy(origin: OriginFor<T>, id: T::KittyId) -> DispatchResult {
 			let buyer = ensure_signed(origin)?;
 			ensure!(Kitties::<T>::contains_key(id), Error::<T>::KittyNotExists);
 			let owner = match KittiesOwner::<T>::get(id) {
@@ -230,10 +240,7 @@ pub mod pallet {
 				None => fail!(Error::<T>::NoNeedToBuyKittyWithoutAnOwner),
 			};
 			let price = match KittiesPrice::<T>::get(id) {
-				Some(price) => {
-					ensure!(payment >= price, Error::<T>::PaymentNotEnough);
-					price
-				}
+				Some(price) => price,
 				None => fail!(Error::<T>::KittyNotForSell),
 			};
 
@@ -248,12 +255,7 @@ pub mod pallet {
 			// or it can be bought by other people.
 			KittiesPrice::<T>::remove(id);
 
-			Self::deposit_event(Event::KittySold(
-				id.clone(),
-				owner.clone(),
-				buyer.clone(),
-				payment,
-			));
+			Self::deposit_event(Event::KittySold(id.clone(), owner.clone(), buyer.clone(), price));
 			Ok(())
 		}
 	}
@@ -278,8 +280,6 @@ pub mod pallet {
 			};
 			Ok((T::KittyId::from(count), count))
 		}
-
-		fn _kitties_count() {}
 
 		fn create_kitty(dna: [u8; 16]) -> Result<T::KittyId, DispatchError> {
 			let (id, count) = Self::get_next_kitty_id()?;
