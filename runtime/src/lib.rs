@@ -280,6 +280,7 @@ impl pallet_kitties::Config for Runtime {
 	type KittyId = u32;
 	type Currency = Balances;
 	type HoldingDepositForOneKitty = HoldingDepositForOneKitty;
+	type Time = Timestamp;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

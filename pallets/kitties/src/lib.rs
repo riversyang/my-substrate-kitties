@@ -9,15 +9,20 @@ pub mod pallet {
 		dispatch::DispatchResult,
 		fail,
 		pallet_prelude::*,
-		traits::{Currency, Randomness, ReservableCurrency},
+		traits::{Currency, Randomness, ReservableCurrency, Time},
 		Printable,
 	};
 	use frame_system::pallet_prelude::*;
 	use sp_io::hashing::blake2_128;
 
+	type BalanceOf<T> =
+		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+	type MomentOf<T> = <<T as Config>::Time as Time>::Moment;
+
 	#[derive(Clone, Encode, Decode)]
-	pub struct Kitty {
+	pub struct Kitty<T: Config> {
 		pub dna: [u8; 16],
+		pub birth_time: MomentOf<T>,
 	}
 
 	#[derive(Encode, Decode, Debug, Clone, PartialEq)]
@@ -25,9 +30,6 @@ pub mod pallet {
 		Male,
 		Female,
 	}
-
-	type BalanceOf<T> =
-		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
@@ -49,6 +51,8 @@ pub mod pallet {
 		/// The owner of kitty must reserve a certain amount of currency
 		#[pallet::constant]
 		type HoldingDepositForOneKitty: Get<BalanceOf<Self>>;
+		/// Time
+		type Time: Time;
 	}
 
 	#[pallet::pallet]
@@ -61,7 +65,8 @@ pub mod pallet {
 
 	#[pallet::storage]
 	#[pallet::getter(fn kitties)]
-	pub type Kitties<T: Config> = StorageMap<_, Blake2_128Concat, T::KittyId, Kitty, OptionQuery>;
+	pub type Kitties<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::KittyId, Kitty<T>, OptionQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn kitties_owner)]
@@ -202,10 +207,7 @@ pub mod pallet {
 		///
 		/// This function can only be called by the owner of the kitty.
 		#[pallet::weight(10_000 + T::DbWeight::get().writes(1))]
-		pub fn clear_price(
-			origin: OriginFor<T>,
-			id: T::KittyId,
-		) -> DispatchResult {
+		pub fn clear_price(origin: OriginFor<T>, id: T::KittyId) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			ensure!(Kitties::<T>::contains_key(id), Error::<T>::KittyNotExists);
 			Self::ensure_owner(&id, &who)?;
@@ -281,7 +283,7 @@ pub mod pallet {
 
 		fn create_kitty(dna: [u8; 16]) -> Result<T::KittyId, DispatchError> {
 			let (id, count) = Self::get_next_kitty_id()?;
-			Kitties::<T>::insert(id, Kitty { dna });
+			Kitties::<T>::insert(id, Kitty { dna, birth_time: T::Time::now() });
 			KittiesCount::<T>::put(count);
 
 			Ok(id)
@@ -328,7 +330,7 @@ pub mod pallet {
 		}
 	}
 
-	impl Kitty {
+	impl<T: Config> Kitty<T> {
 		pub fn gender(&self) -> Gender {
 			if self.dna[0] % 2 == 0 {
 				Gender::Male
